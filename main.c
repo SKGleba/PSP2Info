@@ -12,6 +12,13 @@
 		logg(buffer, strlen(buffer), "ux0:data/vinfo.txt", 2); \
 } while (0)
 	
+#define DMP(name, addr, size) \
+	do { \
+		LOG("\n- raw %s, %d\n", name, size); \
+		hex_dump_log(addr, size); \
+		LOG("- end\n", name, size); \
+} while (0)
+	
 #define LOG_START(...) \
 	do { \
 		char buffer[256]; \
@@ -102,6 +109,17 @@ static int ex(const char* filloc){
   ksceIoClose(fd); return 1;
 }
 
+static int hex_dump_log(const char *addr, unsigned int size)
+{
+    unsigned int i;
+    for (i = 0; i < (size >> 4); i++)
+    {
+        LOG(" %d: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", i, addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7], addr[8], addr[9], addr[10], addr[11], addr[12], addr[13], addr[14], addr[15]);
+        addr += 0x10;
+    }
+    return 0;
+}
+
 // ty flow
 void firmware_string(char string[8], unsigned int version) {
   char a = (version >> 24) & 0xf;
@@ -165,7 +183,7 @@ void logNfoPDev(master_block_t *master, const char* target) {
 		}
 		LOG("\n");
 	} else
-		LOG("\nNot a SCE device! (%s)\n", target);
+		LOG("\n%s is NOT a SCE device!\n", target);
 }
 
 int logdev(void) {
@@ -189,6 +207,38 @@ int logdev(void) {
 	return 0;
 }
 
+void logNfoBattery(void) {
+	unsigned int fwinfo, dfinfo;
+	unsigned long long int hwinfo;
+	ksceSysconGetBatteryVersion(&hwinfo, &fwinfo, &dfinfo);
+	LOG("%s info:", "Battery Controller");
+	LOG("\n Name: %s", ((unsigned int)hwinfo > 7) ? "Abby" : "Bert");
+	LOG("\n Support reset cmd: %s", ((unsigned int)hwinfo < 0xff00) ? "Yes" : "No");
+	LOG("\n HW: 0x%x", (unsigned int)hwinfo);
+	LOG("\n FW: 0x%x", fwinfo);
+	LOG("\n DF: 0x%x", dfinfo);
+	LOG("\n ID: 0x%llx\n", hwinfo);
+	
+}
+
+void logRawQas(void) {
+	int kbl_param = *(unsigned int *)(get_sysroot() + 0x6c);
+	DMP("QA Flags", (char *)(kbl_param + 0x20), 0x10);
+	DMP("Boot Flags", (char *)(kbl_param + 0x30), 0x10);
+	DMP("dip switches", (char *)(kbl_param + 0x40), 0x20);
+}
+
+void logNfoQa(void) {
+	int kbl_param = *(unsigned int *)(get_sysroot() + 0x6c);
+	LOG("\n\n%s info:", "QA");
+	LOG("\n Release check mode: %s", (ksceKernelCheckDipsw(159) != 0) ? "Development" : "Release");
+	LOG("\n PS TV emulation: %s", (ksceKernelCheckDipsw(152) != 0) ? "On" : "Off");
+	LOG("\n Secure state bit: 0x%X", ((*(unsigned int *)(get_sysroot() + 0x28) ^ 1) & 1));
+	LOG("\n Manufacturing mode: %s", ((*(uint32_t *)(kbl_param + 0x6C) & 0x4) != 0) ? "Yes" : "No");
+	LOG("\n Mount GC-SD as sd0: %s", ((*(uint32_t *)(kbl_param + 0x6C) & 0x40000) != 0) ? "Yes" : "No");
+	LOG("\n Use QA (blank) PSID: %s\n\n", (*(uint32_t *)(kbl_param + 0x4C) == 0) ? "Yes" : "No");
+}
+
 void logNfoMain(void) {
 	int kbl_param = *(unsigned int *)(get_sysroot() + 0x6c);
 	char cur_fw[8], min_fw[8];
@@ -209,10 +259,6 @@ void logNfoMain(void) {
 	LOG("\n SK enp paddr: 0x%08" PRIx32, *(uint32_t *)(kbl_param + 0x80));
 	LOG("\n kprx_auth paddr: 0x%08" PRIx32, *(uint32_t *)(kbl_param + 0x90));
 	LOG("\n SRVK paddr: 0x%08" PRIx32, *(uint32_t *)(kbl_param + 0x98));
-	LOG("\n Secure state bit: 0x%X", ((*(unsigned int *)(get_sysroot() + 0x28) ^ 1) & 1));
-	LOG("\n Manufacturing mode: %s", ((*(uint32_t *)(kbl_param + 0x6C) & 0x4) != 0) ? "Yes" : "No");
-	LOG("\n Release check mode: %s", (ksceKernelCheckDipsw(159) != 0) ? "Development" : "Release");
-	LOG("\n PS TV emulation: %s\n", (ksceKernelCheckDipsw(152) != 0) ? "On" : "Off");
 }
 
 void _start() __attribute__ ((weak, alias ("module_start")));
@@ -222,9 +268,16 @@ int module_start(SceSize argc, const void *args)
 	LOG("getting functions... ");
 	if (get_fc() < 0)
 		return SCE_KERNEL_START_NO_RESIDENT;
-	LOG("done\n");
+	LOG("done\n\n");
 	logNfoMain();
-	siofix(logdev);
+	logNfoQa();
+	logNfoBattery();
+	if (ksceKernelSysrootGetShellPid() < 0) {
+		logdev();
+	} else {
+		siofix(logdev);
+	}
+	logRawQas();
 	
 	return SCE_KERNEL_START_SUCCESS;
 }
